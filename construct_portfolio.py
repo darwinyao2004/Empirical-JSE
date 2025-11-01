@@ -60,14 +60,14 @@ except Exception:
 
 
 # ---------------- Config knobs (adjust here) ----------------
-INPUT_ROOT = "covariance_outputs"
-OUTPUT_ROOT = "portfolio_outputs"
+INPUT_ROOT = "c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/covariance_outputs_sim"
+OUTPUT_ROOT = "c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/portfolio_outputs_sim"
 
 # Common knobs
-RIDGE_EPS = 1e-6          # ε for Σ + εI to stabilize inverses
-L2_LAMBDA = 1e-4          # λ for λ||w||_2^2
+RIDGE_EPS = 0          # ε for Σ + εI to stabilize inverses
+L2_LAMBDA = 0          # λ for λ||w||_2^2
 LONG_ONLY = True          # default: long-only
-WEIGHT_CAP = 0.05         # u upper bound for long-only; set to None to remove cap
+WEIGHT_CAP = None         # u upper bound for long-only; set to None to remove cap
 ALLOW_SHORT_IF_SET = False  # if True and no bounds => allow shorting (uses closed form for GMV)
 LEVERAGE_L1_BUDGET = None   # e.g., 1.5 for ||w||_1 ≤ L; only with cvxpy in this template
 
@@ -87,7 +87,7 @@ VOL_TOL = 1e-5
 MAX_BISECT_ITERS = 50
 
 # File pattern
-METHOD_FOLDERS = ["raw", "LW", "PCA", "JSE"]
+METHOD_FOLDERS = ["LW", "PCA", "JSE"]
 FILE_SUFFIX = "_full_cov.csv"
 
 # -----------------------------------------------------------
@@ -416,16 +416,16 @@ def process_method_folder(method_name: str,
             save_weights(permno, w_gmv, os.path.join(out_gmv, f"{yyyymm}_weights.csv"))
 
             # B) Target-Vol MV (zero-mean prior)
-            w_tvmv, vol_tvmv, gamma_used = solve_target_vol(
+            '''w_tvmv, vol_tvmv, gamma_used = solve_target_vol(
                 Sigma,
                 target_vol=TARGET_VOL_EFFECTIVE,
                 long_only=LONG_ONLY,
                 weight_cap=WEIGHT_CAP,
                 l2_lambda=L2_LAMBDA
             )
-            save_weights(permno, w_tvmv, os.path.join(out_tvmv, f"{yyyymm}_weights.csv"))
+            save_weights(permno, w_tvmv, os.path.join(out_tvmv, f"{yyyymm}_weights.csv"))'''
 
-            print(f"[{method_name}] {yyyymm}: GMV done | TVMV done (vol≈{vol_tvmv:.6f}, γ≈{gamma_used:.4g})")
+            print(f"[{method_name}] {yyyymm}: GMV done")# | TVMV done (vol≈{vol_tvmv:.6f}, γ≈{gamma_used:.4g})")
 
         except Exception as e:
             print(f"[{method_name}] ERROR on file {fp}: {e}", file=sys.stderr)

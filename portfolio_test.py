@@ -76,11 +76,11 @@ from typing import Dict, List, Tuple, Optional
 # -----------------------------
 # Configuration
 # -----------------------------
-PORTFOLIO_ROOT = Path("portfolio_outputs")
-MONTHLY_RET_CSV = Path("monthly_ret.csv")
-METHODS = ["raw", "LW", "PCA", "JSE"]
-PORTFOLIO_TYPES = ["PortfolioA_GMV", "PortfolioB_TVMV"]
-RESULTS_ROOT = Path("results")
+PORTFOLIO_ROOT = Path("c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/portfolio_outputs_sim")
+MONTHLY_RET_CSV = Path("c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/500_ret_sim/monthly_ret.csv")
+METHODS = ["LW", "PCA", "JSE"]
+PORTFOLIO_TYPES = ["PortfolioA_GMV"]
+RESULTS_ROOT = Path("c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/results_sim")
 
 
 # -----------------------------

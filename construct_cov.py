@@ -141,7 +141,7 @@ def pca_factor_cov(S: np.ndarray, k: int, eps: float = 1e-12) -> np.ndarray:
     return Sigma
 
 
-def js_shrink_eigenvectors(U: np.ndarray, n: int) -> np.ndarray:
+def js_shrink_eigenvectors(U: np.ndarray, sigma2: float) -> np.ndarray:
     """
     对每个样本特征向量 u_j 做 James–Stein 收缩到“市场方向” m：
         m = 1/sqrt(p) * 1_p
@@ -152,7 +152,6 @@ def js_shrink_eigenvectors(U: np.ndarray, n: int) -> np.ndarray:
     """
     p, k = U.shape
     m = np.ones((p, 1)) / math.sqrt(p)
-    sigma2 = 1.0 / max(1, n)
 
     U_js = np.zeros_like(U)
     for j in range(k):
@@ -180,13 +179,15 @@ def js_eigvec_factor_cov(S: np.ndarray, k: int, n: int, eps: float = 1e-12) -> n
       3) Σ_JS = \tilde U_k Λ_k \tilde U_k^T + diag(diag(S - \tilde U_k Λ_k \tilde U_k^T))
     """
     p = S.shape[0]
+    gamma2 = np.trace(S) / p
+    sigma2 = gamma2 / n
     k_eff = max(0, min(k, p - 1))
     if k_eff == 0:
         diag = np.maximum(np.diag(S), eps)
         return np.diag(diag)
 
     U, lam = top_k_eigenpairs(S, k_eff)
-    U_js = js_shrink_eigenvectors(U, n)
+    U_js = js_shrink_eigenvectors(U, sigma2)
     Sig_k = U_js @ (lam[:, None] * U_js.T)
     diag_resid = np.diag(S - Sig_k)
     psi = np.maximum(diag_resid, eps)
@@ -257,7 +258,6 @@ def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 
         Sigma_JS = js_eigvec_factor_cov(S, k_eff, nobs, eps=eps)
 
         # ✨改动：保存时在最前面加上一列 permno
-        save_with_permno(S,           out_sample / f"{key}_cov.csv", kept_permno)
         save_with_permno(Sigma_LW,    out_lw     / f"{key}_cov.csv", kept_permno)
         save_with_permno(Sigma_PCA,   out_pca    / f"{key}_cov.csv", kept_permno)
         save_with_permno(Sigma_JS,    out_js     / f"{key}_cov.csv", kept_permno)
@@ -298,11 +298,11 @@ def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="构造 LW / PCA / JS-eigvec 协方差矩阵")
-    parser.add_argument("--in_dir", type=str, default="./500_ret_new",
-                        help="月度 CSV 输入目录（默认 ./500_ret_new）")
-    parser.add_argument("--result_txt", type=str, default="./result_500.txt",
+    parser.add_argument("--in_dir", type=str, default="c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/500_ret_sim",
+                        help="月度 CSV 输入目录（默认 ./500_ret_sim）")
+    parser.add_argument("--result_txt", type=str, default="c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/result_500_sim.txt",
                         help="含因子数的文本文件（默认 ./result_500.txt）")
-    parser.add_argument("--out_root", type=str, default="./covariance_outputs",
+    parser.add_argument("--out_root", type=str, default="c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/covariance_outputs_sim",
                         help="输出根目录（默认 ./covariance_outputs）")
     parser.add_argument("--eps", type=float, default=1e-12,
                         help="特质方差的最小截断（默认 1e-12）")
