@@ -60,15 +60,19 @@ except Exception:
 
 
 # ---------------- Config knobs (adjust here) ----------------
-INPUT_ROOT = "c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/covariance_outputs_sim"
-OUTPUT_ROOT = "c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/portfolio_outputs_sim"
+# INPUT_ROOT = "c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/covariance_outputs_sim"
+# OUTPUT_ROOT = "c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/portfolio_outputs_sim"
+INPUT_ROOT = "covariance_outputs_sim"
+OUTPUT_ROOT = "portfolio_outputs_sim"
 
 # Common knobs
 RIDGE_EPS = 0          # ε for Σ + εI to stabilize inverses
 L2_LAMBDA = 0          # λ for λ||w||_2^2
-LONG_ONLY = True          # default: long-only
+# LONG_ONLY = True          # default: long-only
+LONG_ONLY = False          # default: long-only
 WEIGHT_CAP = None         # u upper bound for long-only; set to None to remove cap
-ALLOW_SHORT_IF_SET = False  # if True and no bounds => allow shorting (uses closed form for GMV)
+# ALLOW_SHORT_IF_SET = False  # if True and no bounds => allow shorting (uses closed form for GMV)
+ALLOW_SHORT_IF_SET = True  # if True and no bounds => allow shorting (uses closed form for GMV)
 LEVERAGE_L1_BUDGET = None   # e.g., 1.5 for ||w||_1 ≤ L; only with cvxpy in this template
 
 # Portfolio B (Target-Volatility MV with zero-mean prior)
@@ -89,6 +93,9 @@ MAX_BISECT_ITERS = 50
 # File pattern
 METHOD_FOLDERS = ["LW", "PCA", "JSE"]
 FILE_SUFFIX = "_full_cov.csv"
+
+# Maximum number of files to process (set to None to process all files)
+MAX_FILES = None  # Process only first 30 files for faster testing; set to None for all files
 
 # -----------------------------------------------------------
 
@@ -395,6 +402,14 @@ def process_method_folder(method_name: str,
     if not files:
         print(f"[{method_name}] No files matched in {method_in}")
         return
+    
+    # Limit to first MAX_FILES if specified
+    total_files = len(files)
+    if MAX_FILES is not None and MAX_FILES > 0:
+        files = files[:MAX_FILES]
+        print(f"[{method_name}] Processing {len(files)} of {total_files} files (limited by MAX_FILES={MAX_FILES})")
+    else:
+        print(f"[{method_name}] Processing all {total_files} files")
 
     out_gmv = os.path.join(out_root, method_name, "PortfolioA_GMV")
     out_tvmv = os.path.join(out_root, method_name, "PortfolioB_TVMV")

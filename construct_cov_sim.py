@@ -144,64 +144,64 @@ def pca_factor_cov(S: np.ndarray, k: int, eps: float = 1e-12) -> np.ndarray:
     Sigma = (Sigma + Sigma.T) / 2.0
     return Sigma
 
-
-def js_shrink_eigenvectors(U: np.ndarray, sigma2: float) -> np.ndarray:
-    """
-    对每个样本特征向量 u_j 做 James–Stein 收缩到“市场方向” m：
-        m = 1/sqrt(p) * 1_p
-        w_j = clip( 1 - ((p-2)*σ^2) / ||u_j - m||^2 , 0, 1 )
-        u_j^JS = m + w_j (u_j - m)
-    其中 σ^2 ~ 1/n 作为特征向量噪声的近似量级。最后对列做 QR 重新正交化，
-    并用与原 u_j 的点积对齐符号，避免任意翻转。
-    """
-    p, k = U.shape
-    m = np.ones((p, 1)) / math.sqrt(p)
-
-    U_js = np.zeros_like(U)
-    for j in range(k):
-        u = U[:, j:j + 1]
-        diff = u - m
-        denom = float(np.sum(diff * diff)) + 1e-18
-        w = 1.0 - ((p - 2.0) * sigma2) / denom
-        w = max(0.0, min(1.0, w))
-        U_js[:, j:j + 1] = m + w * diff
-
-    # 重新正交化
-    Q, _ = np.linalg.qr(U_js)
-    # 与原 U 对齐符号
-    for j in range(k):
-        if float(np.dot(Q[:, j], U[:, j])) < 0:
-            Q[:, j] *= -1.0
-    return Q
-
-
 def js_eigvec_factor_cov(S: np.ndarray, k: int, n: int, eps: float = 1e-12) -> np.ndarray:
     """
     JS-eigvec 因子协方差：
       1) S 的前 k 个特征对 (U_k, Λ_k)
-      2) 对 U_k 列做 JS 收缩 -> \tilde U_k（并 QR 正交化）
+      2) 对 U_k 前 k 列按截图公式做 James–Stein 收缩（逐列）
+         h^JSE = m(h)·1 + c^JSE (h - m(h)·1),
+         c^JSE = 1 - ν^2 / s^2(h),
+         s^2(h) = (λ^2/p) * Σ (h_i - m(h))^2,
+         ν^2 = (tr(S) - λ^2) / (p * (n - 1))
       3) Σ_JS = \tilde U_k Λ_k \tilde U_k^T + diag(diag(S - \tilde U_k Λ_k \tilde U_k^T))
     """
     p = S.shape[0]
-    gamma2 = np.trace(S) / p
-    sigma2 = gamma2 / n
     k_eff = max(0, min(k, p - 1))
     if k_eff == 0:
         diag = np.maximum(np.diag(S), eps)
         return np.diag(diag)
 
     U, lam = top_k_eigenpairs(S, k_eff)
-    U_js = js_shrink_eigenvectors(U, sigma2)
-    Sig_k = U_js @ (lam[:, None] * U_js.T)
+
+    # ——逐列 JSE 收缩（严格按照公式）——
+    U_js = U.copy()
+    trS = float(np.trace(S))
+    one = np.ones((p, 1))
+    for j in range(k_eff):
+        h = U[:, j:j+1]                 # 第 j 列
+        lamj = float(lam[j])            # 对应特征值 λ_j
+        m = float(h.mean())             # m(h)
+        h_c = h - m * one
+        # s2 = (lamj ** 2) * float(np.sum(h_c ** 2)) / p
+        # v2 = (trS - (lamj ** 2)) / (p * (n - 1))
+        s2 = lamj * float(np.sum(h_c ** 2)) / p
+        v2 = (trS - lamj) / (p * (n - 1))
+        c = 1.0 - (v2 / (s2 + 1e-18))   # 仅加极小项稳数值
+        U_js[:, j:j+1] = m * one + c * h_c
+
+    # 保留：QR 正交化 + 与原 U 的列向量符号对齐
+    Q, _ = np.linalg.qr(U_js)
+    for j in range(k_eff):
+        if float(np.dot(Q[:, j], U[:, j])) < 0:
+            Q[:, j] *= -1.0
+
+    Sig_k = Q @ (lam[:, None] * Q.T)
     diag_resid = np.diag(S - Sig_k)
     psi = np.maximum(diag_resid, eps)
     Sigma = Sig_k + np.diag(psi)
     Sigma = (Sigma + Sigma.T) / 2.0
     return Sigma
 
-
-def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 1e-12) -> None:
-    """主流程：读取每个 yyyymm_full.csv，输出三类协方差与元数据"""
+def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 1e-12, num_factors: int = 1) -> None:
+    """主流程：读取每个 yyyymm_full.csv，输出三类协方差与元数据
+    
+    Args:
+        in_dir: 输入目录
+        result_txt: 因子数文件（可选，如果 num_factors > 0 则不使用）
+        out_root: 输出根目录
+        eps: 最小特质方差
+        num_factors: 固定因子数（如果 > 0，则使用此值；否则从 result_txt 读取）
+    """
     ensure_dir(out_root)
     out_js = out_root / "JSE"
     out_lw = out_root / "LW"
@@ -212,7 +212,14 @@ def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 
     for d in (out_js, out_lw, out_pca, out_meta, out_logs):
         ensure_dir(d)
 
-    factor_counts = read_factor_counts(result_txt)
+    # If num_factors is specified (> 0), use it; otherwise read from file
+    use_fixed_k = (num_factors > 0)
+    if use_fixed_k:
+        print(f"使用固定因子数: k = {num_factors}")
+        factor_counts = None
+    else:
+        factor_counts = read_factor_counts(result_txt)
+        print(f"从 {result_txt.name} 读取因子数")
 
     files = sorted([p for p in in_dir.glob("*.csv") if p.name.endswith("_full.csv") and not p.name.startswith("._")])
     if not files:
@@ -228,14 +235,23 @@ def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 
 
     for fpath in files:
         key = fpath.stem  # yyyymm_full
-        if key not in factor_counts:
-            print(f"[SKIP] {key}: 在 {result_txt.name} 中未找到因子数，跳过。")
-            continue
-
-        k = int(factor_counts[key])
+        print(f"[Processing] {fpath.name}...")
+        
+        # Determine k: use fixed num_factors or read from file
+        if use_fixed_k:
+            k = num_factors
+        else:
+            if key not in factor_counts:
+                print(f"[SKIP] {key}: 在 {result_txt.name} 中未找到因子数，跳过。")
+                continue
+            k = int(factor_counts[key])
 
         # ✨改动：读取时区分 permno 与收益矩阵
-        df_all = pd.read_csv(fpath, header=None)
+        try:
+            df_all = pd.read_csv(fpath, header=None)
+        except UnicodeDecodeError:
+            # Try with latin-1 encoding if UTF-8 fails
+            df_all = pd.read_csv(fpath, header=None, encoding='latin-1')
         permno_col = df_all.iloc[:, 0].values  # (原始行数,)
         ret_df = df_all.iloc[:, 1:]            # 只把第2列开始当作收益
 
@@ -305,14 +321,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--in_dir", type=str, default="500_ret_sim",
                         help="月度 CSV 输入目录（默认 ./500_ret_sim）")
     parser.add_argument("--result_txt", type=str, default="result_500_sim.txt",
-                        help="含因子数的文本文件（默认 ./result_500.txt）")
+                        help="含因子数的文本文件（默认 ./result_500_sim.txt，如果指定 --num_factors 则忽略）")
     parser.add_argument("--out_root", type=str, default="covariance_outputs_sim",
-                        help="输出根目录（默认 ./covariance_outputs）")
+                        help="输出根目录（默认 ./covariance_outputs_sim）")
     parser.add_argument("--eps", type=float, default=1e-12,
                         help="特质方差的最小截断（默认 1e-12）")
+    parser.add_argument("--num_factors", type=int, default=1,
+                        help="固定因子数（默认 1，适用于 1-factor 模拟；设为 0 则从 result_txt 读取）")
     return parser.parse_args()
 
-# c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/
 
 if __name__ == "__main__":
     args = parse_args()
@@ -323,11 +340,14 @@ if __name__ == "__main__":
     print("输入目录:   ", in_dir)
     print("因子数文件: ", result_txt)
     print("输出根目录: ", out_root)
+    print("固定因子数: ", args.num_factors if args.num_factors > 0 else "从文件读取")
 
     if not in_dir.exists():
         raise FileNotFoundError(f"未找到输入目录：{in_dir}")
-    if not result_txt.exists():
+    
+    # Only require result_txt if num_factors is not specified
+    if args.num_factors <= 0 and not result_txt.exists():
         raise FileNotFoundError(f"未找到因子数文件：{result_txt}")
 
     ensure_dir(out_root)
-    process_folder(in_dir, result_txt, out_root, eps=float(args.eps))
+    process_folder(in_dir, result_txt, out_root, eps=float(args.eps), num_factors=args.num_factors)
