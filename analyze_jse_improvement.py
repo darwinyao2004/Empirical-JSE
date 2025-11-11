@@ -116,10 +116,6 @@ def analyze_all_months(data_dir: Path):
     """
     Analyze JSE vs PCA angles for all months.
     """
-    print("="*80)
-    print("JSE vs PCA Eigenvector Analysis")
-    print("="*80)
-    
     # Get true eigenvector, should be beta_mean around 1.0, and beta_std around 0.5
     betas, true_eigvec_full = get_true_betas(data_dir)
     print(f"\nTrue betas loaded: {len(betas)} assets")
@@ -312,7 +308,7 @@ def plot_results(df_results: pd.DataFrame,
 
     ax2.set_xlabel('Month Index', fontsize=12)
     ax2.set_ylabel(r'$\Delta \cos^2$ (JSE − PCA)', fontsize=12)
-    ax2.set_title(r'Asymptotic Improvement: '
+    ax2.set_title(r'Improvement: '
                   r'$\Delta \cos^2_{\mathrm{emp}}$ vs '
                   r'$\Delta \cos^2_{\mathrm{th}}$',
                   fontsize=14)
@@ -355,10 +351,6 @@ def main():
     if df_results is not None:
         # Create visualization
         plot_results(df_results)
-        
-        print("\n" + "="*80)
-        print("Analysis complete!")
-        print("="*80)
 
 
 if __name__ == "__main__":
