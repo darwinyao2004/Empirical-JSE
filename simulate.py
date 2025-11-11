@@ -52,7 +52,7 @@ BETA_STD    = 0.5             # cross-sectional beta std
 # IDIO_STD_MEAN = 0.012         # idiosyncratic daily vol mean (used for both homo- and heteroskedastic)
 IDIO_STD_MEAN = 0.6/np.sqrt(252)         # idiosyncratic daily vol mean (used for both homo- and heteroskedastic)
 # IDIO_STD_STD  = 0.004         # idiosyncratic daily vol dispersion (only used for heteroskedastic)
-IDIO_STD_STD  = 0.6/np.sqrt(252)         # idiosyncratic daily vol dispersion (only used for heteroskedastic)
+IDIO_STD_STD  = 0.1/np.sqrt(252)         # idiosyncratic daily vol dispersion (only used for heteroskedastic)
 
 OUT_DIR = "500_ret_sim"
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -62,6 +62,9 @@ asset_ids = np.arange(1, N_ASSETS + 1, dtype=int)
 # Fixed cross-sectional parameters for the entire experiment
 # alphas = np.random.normal(ALPHA_MEAN, ALPHA_STD, size=N_ASSETS)  # COMMENTED OUT: not used for covariance research
 betas  = np.random.normal(BETA_MEAN, BETA_STD, size=N_ASSETS)
+
+# Save true betas for validation tests
+np.save(os.path.join(OUT_DIR, "true_betas.npy"), betas)
 
 # Generate idiosyncratic volatilities based on risk type
 if HOMOSKEDASTIC:
