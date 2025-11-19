@@ -3,10 +3,11 @@ The code is mostly based on paper "Portfolio optimisation via strategy-specific 
 Using formula 3.6/4.12 to test if JSE is moving eigenvector closer to the ground truth
 """
 
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from pathlib import Path
-import matplotlib.pyplot as plt
 
 from construct_cov_sim import (
     demean_over_time,
@@ -14,6 +15,8 @@ from construct_cov_sim import (
     top_k_eigenpairs,
     js_eigvec_factor_cov
 )
+# Import LW shrinkage
+from honeyShrinkage import covCor
 
 
 def compute_angle_degrees(v1: np.ndarray, v2: np.ndarray) -> float:
@@ -34,7 +37,7 @@ def compute_angle_degrees(v1: np.ndarray, v2: np.ndarray) -> float:
 
 def compute_cos2(v1: np.ndarray, v2: np.ndarray) -> float:
     """
-    Compute cosine of two vectors, to compare with the theoretical delta later
+    Compute cosine of two vectors, to compare with the asymptotic delta later
     """
     v1_norm = v1 / (np.linalg.norm(v1) + 1e-18)
     v2_norm = v2 / (np.linalg.norm(v2) + 1e-18)
@@ -82,9 +85,9 @@ def compute_cos_sin_theta2(true_eigvec: np.ndarray,
     return cos2_theta, sin2_theta
 
 
-def theoretical_improvement(phi2: float,
-                             cos2_theta: float,
-                             sin2_theta: float) -> float:
+def asymptotic_improvement(phi2: float,
+                            cos2_theta: float,
+                            sin2_theta: float) -> float:
     """
     RHS of eq. (3.6) / (4.12):
 
@@ -158,6 +161,11 @@ def analyze_all_months(data_dir: Path):
         U_pca, lam_pca = top_k_eigenpairs(S, k)
         h_pca = U_pca[:, 0]
         
+        # LW: Leading eigenvector from LW-shrunk covariance
+        Sigma_lw, _ = covCor(X.T)  # covCor expects (n, p) format
+        U_lw, lam_lw = top_k_eigenpairs(Sigma_lw, k)
+        h_lw = U_lw[:, 0]
+        
         # JSE: Leading eigenvector from JSE-shrunk covariance
         Sigma_jse = js_eigvec_factor_cov(S, k, n)
         U_jse, lam_jse = top_k_eigenpairs(Sigma_jse, k)
@@ -169,17 +177,20 @@ def analyze_all_months(data_dir: Path):
         
         # Compute angles to truth
         angle_pca = compute_angle_degrees(h_pca, true_eigvec)
+        angle_lw = compute_angle_degrees(h_lw, true_eigvec)
         angle_jse = compute_angle_degrees(h_jse, true_eigvec)
         
-        # Improvement (negative means JSE is better - smaller angle)
-        improvement = angle_pca - angle_jse
-        pct_improvement = (improvement / angle_pca) * 100
+        # Improvements relative to PCA
+        improvement_jse = angle_pca - angle_jse
+        improvement_lw = angle_pca - angle_lw
+        pct_improvement_jse = (improvement_jse / angle_pca) * 100
+        pct_improvement_lw = (improvement_lw / angle_pca) * 100
 
-        # Squared cosines and theoretical improvement (eq. 4.12 / 3.6) ---
-        # Empirical cos^2 values
+        # Squared cosines and asymptotic improvement (eq. 4.12 / 3.6) ---
+        # Finite cos^2 values
         cos2_pca = compute_cos2(h_pca, true_eigvec)
         cos2_jse = compute_cos2(h_jse, true_eigvec)
-        diff_empirical = cos2_jse - cos2_pca
+        diff_finite = cos2_jse - cos2_pca
 
         # φ^2 from sample eigenvalues (uses n returned by sample_cov)
         phi2 = compute_phi2(S, n)
@@ -189,34 +200,38 @@ def analyze_all_months(data_dir: Path):
         constraint_vec = np.ones((p, 1))
         cos2_theta, sin2_theta = compute_cos_sin_theta2(true_eigvec, constraint_vec)
 
-        # Theoretical asymptotic difference from the paper
-        diff_theoretical = theoretical_improvement(phi2, cos2_theta, sin2_theta)
+        # Asymptotic difference from the paper
+        diff_asymptotic = asymptotic_improvement(phi2, cos2_theta, sin2_theta)
         
         # Store results
         results.append({
             'month': month,
             'angle_pca': angle_pca,
+            'angle_lw': angle_lw,
             'angle_jse': angle_jse,
-            'improvement_deg': improvement,
-            'improvement_pct': pct_improvement,
-            'jse_better': improvement > 0,
+            'improvement_jse_deg': improvement_jse,
+            'improvement_lw_deg': improvement_lw,
+            'improvement_jse_pct': pct_improvement_jse,
+            'improvement_lw_pct': pct_improvement_lw,
+            'jse_better': improvement_jse > 0,
+            'lw_better': improvement_lw > 0,
             'cos2_pca': cos2_pca,
             'cos2_jse': cos2_jse,
-            'diff_empirical': diff_empirical,
-            'diff_theoretical': diff_theoretical,
-            'diff_error': diff_empirical - diff_theoretical,
+            'diff_finite': diff_finite,
+            'diff_asymptotic': diff_asymptotic,
+            'diff_error': diff_finite - diff_asymptotic,
         })
         
         # Print result
-        status = "[+]" if improvement > 0 else "[-]"
+        status_jse = "[+]" if improvement_jse > 0 else "[-]"
+        status_lw = "[+]" if improvement_lw > 0 else "[-]"
         print(
-            f"{status} {month}: "
-            f"angle_PCA={angle_pca:6.3f}°, "
-            f"angle_JSE={angle_jse:6.3f}°, "
-            f"delta deg={improvement:6.3f}°, "
-            f"delta cos²_emp={diff_empirical:8.5f}, "
-            f"delta cos²_th={diff_theoretical:8.5f}, "
-            f"err={diff_empirical - diff_theoretical:+8.5f}"
+            f"{month}: "
+            f"PCA={angle_pca:6.3f}°, "
+            f"LW={angle_lw:6.3f}° {status_lw}, "
+            f"JSE={angle_jse:6.3f}° {status_jse}, "
+            f"delta_cos²_fin={diff_finite:8.5f}, "
+            f"delta_cos²_asy={diff_asymptotic:8.5f}"
         )
     
     # Convert to DataFrame
@@ -228,29 +243,49 @@ def analyze_all_months(data_dir: Path):
     print("="*80)
     
     mean_angle_pca = df_results['angle_pca'].mean()
+    mean_angle_lw = df_results['angle_lw'].mean()
     mean_angle_jse = df_results['angle_jse'].mean()
-    mean_improvement = df_results['improvement_deg'].mean()
-    median_improvement = df_results['improvement_deg'].median()
-    mean_diff_emp = df_results['diff_empirical'].mean()
-    mean_diff_th = df_results['diff_theoretical'].mean()
+    
+    mean_improvement_lw = df_results['improvement_lw_deg'].mean()
+    mean_improvement_jse = df_results['improvement_jse_deg'].mean()
+    median_improvement_lw = df_results['improvement_lw_deg'].median()
+    median_improvement_jse = df_results['improvement_jse_deg'].median()
+    
+    mean_diff_fin = df_results['diff_finite'].mean()
+    mean_diff_asy = df_results['diff_asymptotic'].mean()
     mean_diff_err = df_results['diff_error'].mean()
     std_diff_err = df_results['diff_error'].std()
     
-    num_improved = df_results['jse_better'].sum()
+    num_lw_improved = df_results['lw_better'].sum()
+    num_jse_improved = df_results['jse_better'].sum()
     num_total = len(df_results)
-    pct_improved = (num_improved / num_total) * 100
+    pct_lw_improved = (num_lw_improved / num_total) * 100
+    pct_jse_improved = (num_jse_improved / num_total) * 100
     
-    print(f"\nMean PCA angle:  {mean_angle_pca:.3f}°")
-    print(f"Mean JSE angle:  {mean_angle_jse:.3f}°")
-    print(f"Mean improvement: {mean_improvement:+.3f}° ({mean_improvement/mean_angle_pca*100:+.2f}%)")
-    print(f"Median improvement: {median_improvement:+.3f}°")
-    print(f"\nJSE better in: {num_improved}/{num_total} months ({pct_improved:.1f}%)")
-    print(f"\nMean delta cos² (empirical):   {mean_diff_emp:.6e}")
-    print(f"Mean delta cos² (theoretical): {mean_diff_th:.6e}")
-    print(f"Mean (emp - th) error:    {mean_diff_err:.6e}")
-    print(f"Std of error across months: {std_diff_err:.6e}")
+    print(f"\nMean angles:")
+    print(f"  PCA: {mean_angle_pca:.3f}°")
+    print(f"  LW:  {mean_angle_lw:.3f}°")
+    print(f"  JSE: {mean_angle_jse:.3f}°")
     
-    if mean_improvement > 0:
+    print(f"\nMean improvement over PCA:")
+    print(f"  LW:  {mean_improvement_lw:+.3f}° ({mean_improvement_lw/mean_angle_pca*100:+.2f}%)")
+    print(f"  JSE: {mean_improvement_jse:+.3f}° ({mean_improvement_jse/mean_angle_pca*100:+.2f}%)")
+    
+    print(f"\nMedian improvement over PCA:")
+    print(f"  LW:  {median_improvement_lw:+.3f}°")
+    print(f"  JSE: {median_improvement_jse:+.3f}°")
+    
+    print(f"\nSuccess rate (better than PCA):")
+    print(f"  LW:  {num_lw_improved}/{num_total} months ({pct_lw_improved:.1f}%)")
+    print(f"  JSE: {num_jse_improved}/{num_total} months ({pct_jse_improved:.1f}%)")
+    
+    print(f"\nJSE asymptotic validation:")
+    print(f"  Mean delta cos² (finite):      {mean_diff_fin:.6e}")
+    print(f"  Mean delta cos² (asymptotic):  {mean_diff_asy:.6e}")
+    print(f"  Mean (fin - asy) error:        {mean_diff_err:.6e}")
+    print(f"  Std of error across months:    {std_diff_err:.6e}")
+    
+    if mean_improvement_jse > 0:
         print("\nVALIDATION PASSED: JSE improves over PCA on average!")
     else:
         print("\nWARNING: JSE does not improve on average")
@@ -270,37 +305,43 @@ def plot_results(df_results: pd.DataFrame,
     # 1) Angles Over Time
     ax1.plot(months, df_results['angle_pca'], 'o-', label='PCA',
              color='blue', alpha=0.7, linewidth=2, markersize=4)
+    ax1.plot(months, df_results['angle_lw'], '^-', label='LW',
+             color='pink', alpha=0.7, linewidth=2, markersize=4)
     ax1.plot(months, df_results['angle_jse'], 's-', label='JSE',
              color='red', alpha=0.7, linewidth=2, markersize=4)
-
+    
     ax1.set_ylabel('Angle to True Eigenvector (degrees)', fontsize=12)
-    ax1.set_title('JSE vs PCA Eigenvector Estimation: Angles Over Time',
+    ax1.set_title('PCA vs LW vs JSE Eigenvector Estimation: Angles Over Time',
                   fontsize=14)
     ax1.grid(True, linestyle='--', alpha=0.4)
     ax1.legend()
-
+    
     # Add summary stats box for angles
-    improvements = df_results['improvement_deg']
     mean_angle_pca = df_results['angle_pca'].mean()
+    mean_angle_lw = df_results['angle_lw'].mean()
     mean_angle_jse = df_results['angle_jse'].mean()
-
+    improvement_lw = df_results['improvement_lw_deg'].mean()
+    improvement_jse = df_results['improvement_jse_deg'].mean()
+    
     stats_text = (
-        f"Mean angle (PCA): {mean_angle_pca:.3f}°\n"
-        f"Mean angle (JSE): {mean_angle_jse:.3f}°\n"
-        f"Mean improvement: {improvements.mean():+.3f}°\n"
-        f"JSE better: {df_results['jse_better'].sum()}"
-        f"/{len(df_results)} months"
+        f"Mean angle:\n"
+        f"  PCA: {mean_angle_pca:.3f}°\n"
+        f"  LW:  {mean_angle_lw:.3f}°\n"
+        f"  JSE: {mean_angle_jse:.3f}°\n"
+        f"Mean improvement:\n"
+        f"  LW:  {improvement_lw:+.3f}°\n"
+        f"  JSE: {improvement_jse:+.3f}°"
     )
     ax1.text(0.02, 0.98, stats_text, transform=ax1.transAxes,
-             fontsize=10, verticalalignment='top',
+             fontsize=9, verticalalignment='top',
              bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
 
-    # 2) delta cos² (empirical vs theoretical)
-    ax2.plot(months, df_results['diff_empirical'], 'o-',
-             label=r'$\Delta \cos^2$ (empirical)',
+    # 2) delta cos² (finite vs asymptotic) - JSE only
+    ax2.plot(months, df_results['diff_finite'], 'o-',
+             label=r'$\Delta \cos^2$ (finite)',
              color='green', alpha=0.7, linewidth=2, markersize=4)
-    ax2.plot(months, df_results['diff_theoretical'], 's--',
-             label=r'$\Delta \cos^2$ (theoretical)',
+    ax2.plot(months, df_results['diff_asymptotic'], 's--',
+             label=r'$\Delta \cos^2$ (asymptotic)',
              color='orange', alpha=0.7, linewidth=2, markersize=4)
 
     # Zero line for visual reference
@@ -308,23 +349,23 @@ def plot_results(df_results: pd.DataFrame,
 
     ax2.set_xlabel('Month Index', fontsize=12)
     ax2.set_ylabel(r'$\Delta \cos^2$ (JSE − PCA)', fontsize=12)
-    ax2.set_title(r'Improvement: '
-                  r'$\Delta \cos^2_{\mathrm{emp}}$ vs '
-                  r'$\Delta \cos^2_{\mathrm{th}}$',
+    ax2.set_title(r'JSE Improvement: '
+                  r'$\Delta \cos^2_{\mathrm{fin}}$ vs '
+                  r'$\Delta \cos^2_{\mathrm{asy}}$ (Theorem 4.5)',
                   fontsize=14)
     ax2.grid(True, linestyle='--', alpha=0.4)
     ax2.legend()
 
     # Optional: summary box for delta cos²
-    mean_diff_emp = df_results['diff_empirical'].mean()
-    mean_diff_th = df_results['diff_theoretical'].mean()
-    mean_diff_err = (df_results['diff_empirical']
-                     - df_results['diff_theoretical']).mean()
+    mean_diff_fin = df_results['diff_finite'].mean()
+    mean_diff_asy = df_results['diff_asymptotic'].mean()
+    mean_diff_err = (df_results['diff_finite']
+                     - df_results['diff_asymptotic']).mean()
 
     stats_text2 = (
-        f"Mean delta cos² (emp): {mean_diff_emp:.3e}\n"
-        f"Mean delta cos² (th):  {mean_diff_th:.3e}\n"
-        f"Mean (emp − th):  {mean_diff_err:.3e}"
+        f"Mean delta cos² (fin): {mean_diff_fin:.3e}\n"
+        f"Mean delta cos² (asy): {mean_diff_asy:.3e}\n"
+        f"Mean (fin − asy):  {mean_diff_err:.3e}"
     )
     ax2.text(0.02, 0.98, stats_text2, transform=ax2.transAxes,
              fontsize=10, verticalalignment='top',
