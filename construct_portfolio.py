@@ -91,7 +91,7 @@ VOL_TOL = 1e-5
 MAX_BISECT_ITERS = 50
 
 # File pattern
-METHOD_FOLDERS = ["LW", "PCA", "JSE"]
+METHOD_FOLDERS = ["PCA", "JSE"]  # LW disabled - may have issues
 FILE_SUFFIX = "_full_cov.csv"
 
 # Maximum number of files to process (set to None to process all files)
