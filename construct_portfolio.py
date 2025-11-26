@@ -60,10 +60,10 @@ except Exception:
 
 
 # ---------------- Config knobs (adjust here) ----------------
-# INPUT_ROOT = "c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/covariance_outputs_sim"
-# OUTPUT_ROOT = "c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/portfolio_outputs_sim"
-INPUT_ROOT = "covariance_outputs_sim"
-OUTPUT_ROOT = "portfolio_outputs_sim"
+# INPUT_ROOT = "covariance_outputs_sim"
+# OUTPUT_ROOT = "portfolio_outputs_sim"
+INPUT_ROOT = "covariance_outputs"
+OUTPUT_ROOT = "portfolio_outputs"
 
 # Common knobs
 RIDGE_EPS = 0          # ε for Σ + εI to stabilize inverses
