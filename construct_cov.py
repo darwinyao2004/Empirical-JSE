@@ -29,6 +29,8 @@ from typing import Dict, Tuple
 import numpy as np
 import pandas as pd
 
+from honeyShrinkage import covCor
+
 
 def ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
@@ -145,54 +147,64 @@ def pca_factor_cov(S: np.ndarray, k: int, eps: float = 1e-12) -> np.ndarray:
     return Sigma
 
 
-def js_shrink_eigenvectors(U: np.ndarray, sigma2: float) -> np.ndarray:
+def ortho(M: np.ndarray) -> np.ndarray:
     """
-    对每个样本特征向量 u_j 做 James–Stein 收缩到“市场方向” m：
-        m = 1/sqrt(p) * 1_p
-        w_j = clip( 1 - ((p-2)*σ^2) / ||u_j - m||^2 , 0, 1 )
-        u_j^JS = m + w_j (u_j - m)
-    其中 σ^2 ~ 1/n 作为特征向量噪声的近似量级。最后对列做 QR 重新正交化，
-    并用与原 u_j 的点积对齐符号，避免任意翻转。
+    Orthonormalize columns of M using eigendecomposition.
+    Returns orthonormal basis with same column space as M.
     """
-    p, k = U.shape
-    m = np.ones((p, 1)) / math.sqrt(p)
-
-    U_js = np.zeros_like(U)
-    for j in range(k):
-        u = U[:, j:j + 1]
-        diff = u - m
-        denom = float(np.sum(diff * diff)) + 1e-18
-        w = 1.0 - ((p - 2.0) * sigma2) / denom
-        w = max(0.0, min(1.0, w))
-        U_js[:, j:j + 1] = m + w * diff
-
-    # 重新正交化
-    Q, _ = np.linalg.qr(U_js)
-    # 与原 U 对齐符号
-    for j in range(k):
-        if float(np.dot(Q[:, j], U[:, j])) < 0:
-            Q[:, j] *= -1.0
+    vals, vecs = np.linalg.eigh(M.T @ M)
+    idx = np.argsort(vals)[::-1]  # descending order
+    vals = vals[idx]
+    vecs = vecs[:, idx]
+    Q = M @ vecs / np.sqrt(vals)
     return Q
 
 
 def js_eigvec_factor_cov(S: np.ndarray, k: int, n: int, eps: float = 1e-12) -> np.ndarray:
     """
     JS-eigvec 因子协方差：
-      1) S 的前 k 个特征对 (U_k, Λ_k)
-      2) 对 U_k 列做 JS 收缩 -> \tilde U_k（并 QR 正交化）
+      1) Top k eigenpairs of S: (U_k, Λ_k)
+      2) Apply James–Stein shrinkage to each column of U_k:
+         h^JSE = m(h)·1 + c^JSE (h - m(h)·1),
+         c^JSE = 1 - ν^2 / s^2(h),
+         s^2(h) = (λ^2/p) * Σ (h_i - m(h))^2,
+         ν^2 = (tr(S) - λ^2) / (p * (n - 1))
       3) Σ_JS = \tilde U_k Λ_k \tilde U_k^T + diag(diag(S - \tilde U_k Λ_k \tilde U_k^T))
     """
     p = S.shape[0]
-    gamma2 = np.trace(S) / p
-    sigma2 = gamma2 / n
     k_eff = max(0, min(k, p - 1))
     if k_eff == 0:
         diag = np.maximum(np.diag(S), eps)
         return np.diag(diag)
 
     U, lam = top_k_eigenpairs(S, k_eff)
-    U_js = js_shrink_eigenvectors(U, sigma2)
-    Sig_k = U_js @ (lam[:, None] * U_js.T)
+
+    # Column-wise JSE shrinkage (following the formula strictly)
+    U_js = U.copy()
+    trS = float(np.trace(S))
+    one = np.ones((p, 1))
+    for j in range(k_eff):
+        h = U[:, j:j+1]                 # j-th column
+        lamj = float(lam[j])            # corresponding eigenvalue λ_j
+        m = float(h.mean())             # m(h)
+        h_c = h - m * one
+        # s2 = (lamj ** 2) * float(np.sum(h_c ** 2)) / p
+        # v2 = (trS - (lamj ** 2)) / (p * (n - 1))
+        s2 = lamj * float(np.sum(h_c ** 2)) / p
+        # v2 represents the average variance of remaining eigenvalues
+        # After extracting factors 0 to j, the remaining variance is from eigenvalues j+1 onwards
+        sum_lam_up_to_j = float(np.sum(lam[:j+1]))  # sum of λ_0 + λ_1 + ... + λ_j
+        v2 = (trS - sum_lam_up_to_j) / (p * (n - (j + 1)))
+        c = 1.0 - (v2 / (s2 + 1e-18))   # add small value for numerical stability
+        U_js[:, j:j+1] = m * one + c * h_c
+
+    # QR orthogonalization + align sign with original U column vectors
+    Q, _ = np.linalg.qr(U_js)
+    for j in range(k_eff):
+        if float(np.dot(Q[:, j], U[:, j])) < 0:
+            Q[:, j] *= -1.0
+
+    Sig_k = Q @ (lam[:, None] * Q.T)
     diag_resid = np.diag(S - Sig_k)
     psi = np.maximum(diag_resid, eps)
     Sigma = Sig_k + np.diag(psi)
@@ -200,8 +212,149 @@ def js_eigvec_factor_cov(S: np.ndarray, k: int, n: int, eps: float = 1e-12) -> n
     return Sigma
 
 
-def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 1e-12) -> None:
-    """主流程：读取每个 yyyymm_full.csv，输出三类协方差与元数据"""
+def jsm_factor_cov(S: np.ndarray, X: np.ndarray, k: int, n: int, eps: float = 1e-12) -> np.ndarray:
+    """
+    JSM (James-Stein Multiple factors) factor covariance for multiple factors.
+    
+    This method performs joint shrinkage of multiple eigenvectors toward a target space
+    spanned by the constant vector and the mean return vector, following the approach
+    in H_jsm.py.
+    
+    Steps:
+      1) Compute top k eigenpairs of S: (U_k, Λ_k)
+      2) Estimate residual variance from bulk eigenvalues
+      3) Compute shrinkage factors Ψ² for each eigenvalue
+      4) Create target matrix from [constant vector, mean vector]
+      5) Apply weighted JSM shrinkage:
+         - Weight data by inverse sqrt of residual variances
+         - Compute eigenvectors of weighted covariance
+         - Shrink toward orthonormalized target space
+      6) Construct covariance: Σ = H_jsm Λ_k H_jsm^T + Ψ
+    
+    Args:
+        S: Sample covariance matrix (p × p)
+        X: Demeaned return matrix (p × n), rows=assets, columns=time
+        k: Number of factors
+        n: Number of observations
+        eps: Minimum idiosyncratic variance
+        
+    Returns:
+        Covariance matrix with JSM-shrunk factors
+    """
+    p = S.shape[0]
+    k_eff = max(0, min(k, p - 1))
+    if k_eff == 0:
+        diag = np.maximum(np.diag(S), eps)
+        return np.diag(diag)
+
+    # Get top k eigenpairs
+    U, lam = top_k_eigenpairs(S, k_eff)
+    
+    # Compute mean returns (time average for each asset)
+    m = X.mean(axis=1)  # (p,)
+    
+    # Marchenko-Pastur correction parameter
+    npc = n / p
+    
+    # Estimate residual variance from bulk eigenvalues
+    trS = float(np.trace(S))
+    sum_top_lam = float(np.sum(lam))
+    
+    # Adjusted formula for bulk variance (residual/idiosyncratic variance)
+    gam2 = (trS - sum_top_lam) / (n - k_eff - npc * k_eff)
+    gam2 = max(gam2, eps)  # ensure positive
+    
+    # Shrinkage factors for eigenvalues (Ψ²)
+    Psi2 = (lam - gam2) / lam
+    Psi2 = np.maximum(Psi2, 0.0)  # ensure non-negative
+    
+    # Compute residual variances (Delta)
+    eigs = lam  # eigenvalues
+    Delta = np.sum((X / np.sqrt(n) - (U * np.sqrt(eigs)) @ (U.T @ X / np.sqrt(n)))**2, axis=1)
+    Delta = Delta * gam2 / np.mean(Delta)  # enforce relation gam2 = mean(Delta)
+    Delta = np.maximum(Delta, eps)  # ensure positive
+    
+    # Apply James-Stein shrinkage to mean vector
+    e = np.ones(p)
+    gm = (m @ e) * e / p  # grand mean vector
+    m2 = float(np.sum((m - gm)**2))
+    c_m = 1.0 - (p * gam2 / n) / (m2 + 1e-18)
+    mjs = c_m * m + (1.0 - c_m) * gm  # JS-shrunk mean
+    
+    # === Weighted JSM calculations ===
+    # Weight by inverse sqrt of residual variances
+    D = 1.0 / np.sqrt(Delta)  # (p,)
+    
+    # Weighted data matrix
+    Y = X.copy()  # (p, n)
+    YD = (Y.T * D).T  # weight each row by D
+    
+    # Compute covariance of weighted data
+    LD = YD.T @ YD / p  # (n, n) dual covariance
+    
+    # Get top k eigenpairs of weighted covariance
+    vals_D, vecs_D = np.linalg.eigh(LD)
+    idx = np.argsort(vals_D)[::-1]  # descending order
+    vals_D = vals_D[idx][:k_eff]
+    vecs_D = vecs_D[:, idx][:, :k_eff]
+    
+    # Convert to asset-space eigenvectors
+    sHD = YD @ vecs_D / np.sqrt(p * vals_D)  # (p, k)
+    eigs_D = vals_D * p / n
+    
+    # Compute shrinkage factors for weighted eigenvalues
+    sum_vals_D = float(np.sum(vals_D))
+    trace_LD = float(np.trace(LD))
+    gam2D = (trace_LD - sum_vals_D) / (n - k_eff - npc)
+    gam2D = max(gam2D, eps)
+    Psi2D = (vals_D - gam2D) / vals_D
+    Psi2D = np.maximum(Psi2D, 0.0)
+    
+    # Create weighted target matrix: [e*D, mjs*D]
+    AD = np.vstack((e * D, mjs * D)).T  # (p, 2)
+    sMD = ortho(AD)  # orthonormalize
+    
+    # Compute weighted factor matrix
+    HD = sHD * np.sqrt(eigs_D)  # (p, k)
+    
+    # Project HD onto target space
+    MD = (AD @ np.linalg.inv(AD.T @ AD)) @ (AD.T @ HD)  # (p, k)
+    
+    # Compute shrinkage matrix
+    ND = (HD - MD).T @ (HD - MD)  # (k, k)
+    CD = np.eye(k_eff) - np.linalg.inv(ND + eps * np.eye(k_eff)) * (gam2D * p / n)
+    
+    # Apply shrinkage
+    sHD_jsm = (HD @ CD + MD @ (np.eye(k_eff) - CD)) / np.sqrt(eigs_D)
+    
+    # Unweight back to original space
+    sH_jsm = ortho((sHD_jsm.T / D).T)  # (p, k)
+    
+    # Estimate factor variances (use original eigenvalues with shrinkage)
+    fvar_est = Psi2 * lam
+    
+    # Construct covariance matrix
+    Sig_k = sH_jsm @ (fvar_est[:, None] * sH_jsm.T)
+    
+    # Residual diagonal
+    diag_resid = np.diag(S - Sig_k)
+    psi = np.maximum(diag_resid, eps)
+    
+    Sigma = Sig_k + np.diag(psi)
+    Sigma = (Sigma + Sigma.T) / 2.0
+    
+    return Sigma
+
+def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 1e-12, num_factors: int = 0) -> None:
+    """主流程：读取每个 yyyymm_full.csv，输出三类协方差与元数据
+    
+    Args:
+        in_dir: Input directory
+        result_txt: Factor count file (optional, not used if num_factors > 0)
+        out_root: Output root directory
+        eps: Minimum idiosyncratic variance
+        num_factors: Fixed number of factors (if > 0, use this value; otherwise read from result_txt)
+    """
     ensure_dir(out_root)
     out_js = out_root / "JSE"
     out_lw = out_root / "LW"
@@ -212,7 +365,14 @@ def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 
     for d in (out_js, out_lw, out_pca, out_meta, out_logs):
         ensure_dir(d)
 
-    factor_counts = read_factor_counts(result_txt)
+    # If num_factors is specified (> 0), use it; otherwise read from file
+    use_fixed_k = (num_factors > 0)
+    if use_fixed_k:
+        print(f"Using fixed number of factors: k = {num_factors}")
+        factor_counts = None
+    else:
+        factor_counts = read_factor_counts(result_txt)
+        print(f"Reading factor counts from {result_txt.name}")
 
     files = sorted([p for p in in_dir.glob("*.csv") if p.name.endswith("_full.csv") and not p.name.startswith("._")])
     if not files:
@@ -228,14 +388,23 @@ def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 
 
     for fpath in files:
         key = fpath.stem  # yyyymm_full
-        if key not in factor_counts:
-            print(f"[SKIP] {key}: 在 {result_txt.name} 中未找到因子数，跳过。")
-            continue
-
-        k = int(factor_counts[key])
+        print(f"[Processing] {fpath.name}...")
+        
+        # Determine k: use fixed num_factors or read from file
+        if use_fixed_k:
+            k = num_factors
+        else:
+            if key not in factor_counts:
+                print(f"[SKIP] {key}: 在 {result_txt.name} 中未找到因子数，跳过。")
+                continue
+            k = int(factor_counts[key])
 
         # ✨改动：读取时区分 permno 与收益矩阵
-        df_all = pd.read_csv(fpath, header=None)
+        try:
+            df_all = pd.read_csv(fpath, header=None)
+        except UnicodeDecodeError:
+            # Try with latin-1 encoding if UTF-8 fails
+            df_all = pd.read_csv(fpath, header=None, encoding='latin-1')
         permno_col = df_all.iloc[:, 0].values  # (原始行数,)
         ret_df = df_all.iloc[:, 1:]            # 只把第2列开始当作收益
 
@@ -254,7 +423,10 @@ def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 
         S, nobs = sample_cov(X)
 
         # 有效因子数：不能超过 p-1 和 n-1
-        k_eff = max(0, min(k, p - 1, nobs - 1))
+        # k_eff = max(0, min(k, p - 1, nobs - 1))
+
+        # # Temporarily setting factor number as 1
+        # k_eff = 1
 
         # 三种估计
         Sigma_LW, delta = ledoit_wolf(S, X)
@@ -292,7 +464,7 @@ def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 
                 lw_delta=float(delta),
             )
         )
-        print(f"[OK] {key}: p={p}, n={nobs}, k={k_eff} -> 已保存三类协方差。")
+        print(f"[OK] {key}: p={p}, n={nobs}, k={k_eff} -> 已保存三类协方差 (LW, PCA, JSE)。")
 
     if log_rows:
         df_log = pd.DataFrame(log_rows)
@@ -302,14 +474,16 @@ def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="构造 LW / PCA / JS-eigvec 协方差矩阵")
-    parser.add_argument("--in_dir", type=str, default="500_ret_sim",
-                        help="月度 CSV 输入目录（默认 ./500_ret_sim）")
-    parser.add_argument("--result_txt", type=str, default="result_500_sim.txt",
-                        help="含因子数的文本文件（默认 ./result_500.txt）")
-    parser.add_argument("--out_root", type=str, default="covariance_outputs_sim",
+    parser.add_argument("--in_dir", type=str, default="500_ret_emp",
+                        help="月度 CSV 输入目录（默认 ./500_ret_emp）")
+    parser.add_argument("--result_txt", type=str, default="result_500.txt",
+                        help="含因子数的文本文件（默认 ./result_500.txt，如果指定 --num_factors 则忽略）")
+    parser.add_argument("--out_root", type=str, default="covariance_outputs",
                         help="输出根目录（默认 ./covariance_outputs）")
     parser.add_argument("--eps", type=float, default=1e-12,
                         help="特质方差的最小截断（默认 1e-12）")
+    parser.add_argument("--num_factors", type=int, default=0,
+                        help="固定因子数（默认 0，从 result_txt 读取；如果 > 0，则使用此值）")
     return parser.parse_args()
 
 # c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/
@@ -323,11 +497,14 @@ if __name__ == "__main__":
     print("输入目录:   ", in_dir)
     print("因子数文件: ", result_txt)
     print("输出根目录: ", out_root)
+    print("固定因子数: ", args.num_factors if args.num_factors > 0 else "从文件读取")
 
     if not in_dir.exists():
         raise FileNotFoundError(f"未找到输入目录：{in_dir}")
-    if not result_txt.exists():
+    
+    # Only require result_txt if num_factors is not specified
+    if args.num_factors <= 0 and not result_txt.exists():
         raise FileNotFoundError(f"未找到因子数文件：{result_txt}")
 
     ensure_dir(out_root)
-    process_folder(in_dir, result_txt, out_root, eps=float(args.eps))
+    process_folder(in_dir, result_txt, out_root, eps=float(args.eps), num_factors=args.num_factors)
