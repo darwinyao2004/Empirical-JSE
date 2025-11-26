@@ -65,7 +65,7 @@ for (year, month) in month_iter("201501", "202412"):
     F = np.random.normal(FACTOR_MEAN, FACTOR_STD, size=WINDOW_DAYS)
 
     # Idiosyncratic shocks (N_ASSETS x 63)
-    eps = np.random.normal(0.0, idio_stds[:, None], size=(N_ASSETS, WINDOW_DAYS))
+    eps = np.random.normal(0.0, IDIO_STD_MEAN, size=(N_ASSETS, WINDOW_DAYS))
 
     # Single-factor model: r_it = alpha_i + beta_i * F_t + eps_it
     R = alphas[:, None] + betas[:, None] * F[None, :] + eps  # shape (500, 63)

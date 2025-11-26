@@ -60,13 +60,13 @@ except Exception:
 
 
 # ---------------- Config knobs (adjust here) ----------------
-INPUT_ROOT = "c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/covariance_outputs_sim"
-OUTPUT_ROOT = "c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/portfolio_outputs_sim"
+INPUT_ROOT = "covariance_outputs_emp"
+OUTPUT_ROOT = "portfolio_outputs_emp"
 
 # Common knobs
 RIDGE_EPS = 0          # ε for Σ + εI to stabilize inverses
 L2_LAMBDA = 0          # λ for λ||w||_2^2
-LONG_ONLY = True          # default: long-only
+LONG_ONLY = False          # default: long-only
 WEIGHT_CAP = None         # u upper bound for long-only; set to None to remove cap
 ALLOW_SHORT_IF_SET = False  # if True and no bounds => allow shorting (uses closed form for GMV)
 LEVERAGE_L1_BUDGET = None   # e.g., 1.5 for ||w||_1 ≤ L; only with cvxpy in this template
@@ -87,7 +87,7 @@ VOL_TOL = 1e-5
 MAX_BISECT_ITERS = 50
 
 # File pattern
-METHOD_FOLDERS = ["LW", "PCA", "JSE"]
+METHOD_FOLDERS = ["PCA", "JSE"]
 FILE_SUFFIX = "_full_cov.csv"
 
 # -----------------------------------------------------------

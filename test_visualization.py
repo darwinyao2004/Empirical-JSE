@@ -19,9 +19,9 @@ import matplotlib.pyplot as plt
 # -----------------------------
 # Configuration
 # -----------------------------
-RESULTS_ROOT = Path("results")
+RESULTS_ROOT = Path("results_emp")
 FIG_ROOT = RESULTS_ROOT / "figures"
-METHODS = ["raw", "LW", "PCA", "JSE"]
+METHODS = ["PCA", "JSE"]
 PORTFOLIO_TYPES = ["PortfolioA_GMV", "PortfolioB_TVMV"]
 
 # Keep the earlier toggle

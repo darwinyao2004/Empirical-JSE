@@ -76,11 +76,11 @@ from typing import Dict, List, Tuple, Optional
 # -----------------------------
 # Configuration
 # -----------------------------
-PORTFOLIO_ROOT = Path("c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/portfolio_outputs_sim")
-MONTHLY_RET_CSV = Path("c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/500_ret_sim/monthly_ret.csv")
-METHODS = ["LW", "PCA", "JSE"]
+PORTFOLIO_ROOT = Path("portfolio_outputs_emp")
+MONTHLY_RET_CSV = Path("500_ret_emp/monthly_ret.csv")
+METHODS = ["PCA", "JSE"]
 PORTFOLIO_TYPES = ["PortfolioA_GMV"]
-RESULTS_ROOT = Path("c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/results_sim")
+RESULTS_ROOT = Path("results_emp")
 
 
 # -----------------------------
@@ -269,7 +269,7 @@ def main():
                     print(f"[WARN] {e} (skipping file {wf})")
                     continue
 
-                ny, nm = next_year_month(y, m)
+                ny, nm = y, m #next_year_month(y, m)
                 # Pick the last available date within that next month
                 ts = pick_month_column(month_index, ny, nm)
                 if ts is None:

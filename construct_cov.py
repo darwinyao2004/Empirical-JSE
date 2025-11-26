@@ -140,61 +140,51 @@ def pca_factor_cov(S: np.ndarray, k: int, eps: float = 1e-12) -> np.ndarray:
     Sigma = (Sigma + Sigma.T) / 2.0
     return Sigma
 
-
-def js_shrink_eigenvectors(U: np.ndarray, sigma2: float) -> np.ndarray:
-    """
-    对每个样本特征向量 u_j 做 James–Stein 收缩到“市场方向” m：
-        m = 1/sqrt(p) * 1_p
-        w_j = clip( 1 - ((p-2)*σ^2) / ||u_j - m||^2 , 0, 1 )
-        u_j^JS = m + w_j (u_j - m)
-    其中 σ^2 ~ 1/n 作为特征向量噪声的近似量级。最后对列做 QR 重新正交化，
-    并用与原 u_j 的点积对齐符号，避免任意翻转。
-    """
-    p, k = U.shape
-    m = np.ones((p, 1)) / math.sqrt(p)
-
-    U_js = np.zeros_like(U)
-    for j in range(k):
-        u = U[:, j:j + 1]
-        diff = u - m
-        denom = float(np.sum(diff * diff)) + 1e-18
-        w = 1.0 - ((p - 2.0) * sigma2) / denom
-        w = max(0.0, min(1.0, w))
-        U_js[:, j:j + 1] = m + w * diff
-
-    # 重新正交化
-    Q, _ = np.linalg.qr(U_js)
-    # 与原 U 对齐符号
-    for j in range(k):
-        if float(np.dot(Q[:, j], U[:, j])) < 0:
-            Q[:, j] *= -1.0
-    return Q
-
-
 def js_eigvec_factor_cov(S: np.ndarray, k: int, n: int, eps: float = 1e-12) -> np.ndarray:
     """
     JS-eigvec 因子协方差：
       1) S 的前 k 个特征对 (U_k, Λ_k)
-      2) 对 U_k 列做 JS 收缩 -> \tilde U_k（并 QR 正交化）
+      2) 对 U_k 前 k 列按截图公式做 James–Stein 收缩（逐列）
+         h^JSE = m(h)·1 + c^JSE (h - m(h)·1),
+         c^JSE = 1 - ν^2 / s^2(h),
+         s^2(h) = (λ^2/p) * Σ (h_i - m(h))^2,
+         ν^2 = (tr(S) - λ^2) / (p * (n - 1))
       3) Σ_JS = \tilde U_k Λ_k \tilde U_k^T + diag(diag(S - \tilde U_k Λ_k \tilde U_k^T))
     """
     p = S.shape[0]
-    gamma2 = np.trace(S) / p
-    sigma2 = gamma2 / n
     k_eff = max(0, min(k, p - 1))
     if k_eff == 0:
         diag = np.maximum(np.diag(S), eps)
         return np.diag(diag)
 
     U, lam = top_k_eigenpairs(S, k_eff)
-    U_js = js_shrink_eigenvectors(U, sigma2)
-    Sig_k = U_js @ (lam[:, None] * U_js.T)
+
+    # ——逐列 JSE 收缩（严格按照公式）——
+    U_js = U.copy()
+    trS = float(np.trace(S))
+    one = np.ones((p, 1))
+    for j in range(1):
+        h = U[:, j:j+1]                 # 第 j 列
+        lamj = float(lam[j])            # 对应特征值 λ_j
+        m = float(h.mean())             # m(h)
+        h_c = h - m * one
+        s2 = lamj * float(np.sum(h_c ** 2)) / p
+        v2 = (trS - lamj) / (p * (n - 1))
+        c = 1.0 - (v2 / (s2 + 1e-18))   # 仅加极小项稳数值
+        U_js[:, j:j+1] = m * one + c * h_c
+
+    # 保留：QR 正交化 + 与原 U 的列向量符号对齐
+    Q, _ = np.linalg.qr(U_js)
+    for j in range(k_eff):
+        if float(np.dot(Q[:, j], U[:, j])) < 0:
+            Q[:, j] *= -1.0
+
+    Sig_k = Q @ (lam[:, None] * Q.T)
     diag_resid = np.diag(S - Sig_k)
     psi = np.maximum(diag_resid, eps)
     Sigma = Sig_k + np.diag(psi)
     Sigma = (Sigma + Sigma.T) / 2.0
     return Sigma
-
 
 def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 1e-12) -> None:
     """主流程：读取每个 yyyymm_full.csv，输出三类协方差与元数据"""
@@ -298,11 +288,11 @@ def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="构造 LW / PCA / JS-eigvec 协方差矩阵")
-    parser.add_argument("--in_dir", type=str, default="c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/500_ret_sim",
+    parser.add_argument("--in_dir", type=str, default="500_ret_emp",
                         help="月度 CSV 输入目录（默认 ./500_ret_sim）")
-    parser.add_argument("--result_txt", type=str, default="c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/result_500_sim.txt",
+    parser.add_argument("--result_txt", type=str, default="result_500_emp.txt",
                         help="含因子数的文本文件（默认 ./result_500.txt）")
-    parser.add_argument("--out_root", type=str, default="c:/Users/remote/Desktop/temp/tmp1030/code by Darwin/covariance_outputs_sim",
+    parser.add_argument("--out_root", type=str, default="covariance_outputs_emp",
                         help="输出根目录（默认 ./covariance_outputs）")
     parser.add_argument("--eps", type=float, default=1e-12,
                         help="特质方差的最小截断（默认 1e-12）")
