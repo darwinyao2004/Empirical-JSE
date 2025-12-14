@@ -172,6 +172,7 @@ def js_eigvec_factor_cov(S: np.ndarray, k: int, n: int, eps: float = 1e-12) -> n
     one = np.ones((p, 1))
     for j in range(k_eff):
         h = U[:, j:j+1]                 # j-th column
+        h = -h if h.mean() < 0 else h
         lamj = float(lam[j])            # corresponding eigenvalue λ_j
         m = float(h.mean())             # m(h)
         h_c = h - m * one
@@ -439,7 +440,7 @@ def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 
         # save_with_permno(Sigma_LW,    out_lw     / f"{key}_cov.csv", kept_permno)
         save_with_permno(Sigma_PCA,   out_pca    / f"{key}_cov.csv", kept_permno)
         save_with_permno(Sigma_JS,    out_js     / f"{key}_cov.csv", kept_permno)
-        # save_with_permno(Sigma_JSM,   out_jsm    / f"{key}_cov.csv", kept_permno)
+        save_with_permno(S,   out_sample    / f"{key}_cov.csv", kept_permno)
 
         # Metadata
         meta = {
@@ -477,7 +478,7 @@ def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Construct PCA / JS-eigvec covariance matrices (LW disabled)")
-    parser.add_argument("--in_dir", type=str, default="500_ret_emp",
+    parser.add_argument("--in_dir", type=str, default="500_ret_exlude_zero_var",
                         help="Monthly CSV input directory (default: ./500_ret_emp)")
     parser.add_argument("--result_txt", type=str, default="result_500_emp.txt",
                         help="Text file with factor counts (default: ./result_500_sim.txt, ignored if --num_factors is specified)")
@@ -496,7 +497,7 @@ if __name__ == "__main__":
     result_txt = Path(args.result_txt).expanduser().resolve()
     out_root = Path(args.out_root).expanduser().resolve()
 
-    args.num_factors = -1
+    args.num_factors = 1
 
     print("Input directory:     ", in_dir)
     print("Factor count file:   ", result_txt)

@@ -269,7 +269,7 @@ def main():
                     print(f"[WARN] {e} (skipping file {wf})")
                     continue
 
-                ny, nm = y, m #next_year_month(y, m)
+                ny, nm = next_year_month(y, m)
                 # Pick the last available date within that next month
                 ts = pick_month_column(month_index, ny, nm)
                 if ts is None:

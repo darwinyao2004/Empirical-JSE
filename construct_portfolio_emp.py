@@ -394,6 +394,31 @@ def save_weights(permnos: np.ndarray, w: np.ndarray, out_path: str):
     df.to_csv(out_path, index=False)
 
 
+def solve_gmv_closed(Sigma: np.ndarray) -> np.ndarray:
+    """
+    最简单的 GMV（Global Minimum Variance）组合求解：
+    - 无约束（允许做空、不设权重上限、无正则）
+    - 仅依赖协方差矩阵 Sigma
+    - 输出：权重向量，元素和为 1
+    """
+    # 确保是二维矩阵
+    Sigma = np.asarray(Sigma, dtype=float)
+    if Sigma.ndim != 2 or Sigma.shape[0] != Sigma.shape[1]:
+        raise ValueError("Sigma must be a square 2D array.")
+
+    p = Sigma.shape[0]
+    ones = np.ones(p)
+
+    # 计算 Σ^{-1} * 1
+    # 比 np.linalg.inv 更稳健，直接解线性方程组
+    Sigma_inv_ones = np.linalg.solve(Sigma, ones)
+
+    # 归一化使权重和为 1
+    weights = Sigma_inv_ones / Sigma_inv_ones.sum()
+
+    return weights
+
+
 def process_method_folder(method_name: str,
                           in_root: str = INPUT_ROOT,
                           out_root: str = OUTPUT_ROOT):
@@ -423,11 +448,12 @@ def process_method_folder(method_name: str,
             permno, Sigma = load_cov_csv(fp)
 
             # A) GMV
-            w_gmv = solve_gmv(Sigma,
+            '''w_gmv = solve_gmv(Sigma,
                               long_only=LONG_ONLY,
                               weight_cap=WEIGHT_CAP,
                               l2_lambda=L2_LAMBDA,
-                              allow_short_if_set=ALLOW_SHORT_IF_SET)
+                              allow_short_if_set=ALLOW_SHORT_IF_SET)'''
+            w_gmv = solve_gmv_closed(Sigma)
             save_weights(permno, w_gmv, os.path.join(out_gmv, f"{yyyymm}_weights.csv"))
 
             # B) Target-Vol MV (zero-mean prior)
