@@ -127,7 +127,22 @@ def top_k_eigenpairs(S: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
     return vecs[:, :k], vals[:k]
 
 
-def pca_factor_cov(S: np.ndarray, k: int, eps: float = 1e-12) -> np.ndarray:
+def top1_eigvec_mean(Sigma: np.ndarray) -> Tuple[float, float]:
+    """
+    Return (mean of top-eigenvalue eigenvector, top eigenvalue),
+    with sign aligned so eigenvector mean is non-negative.
+    """
+    A = (Sigma + Sigma.T) / 2.0
+    vals, vecs = np.linalg.eigh(A)  # ascending
+    j = int(np.argmax(vals))
+    v = vecs[:, j]
+    if float(v.mean()) < 0:
+        v = -v
+    return float(v.mean()), float(vals[j])
+
+
+
+'''def pca_factor_cov(S: np.ndarray, k: int, eps: float = 1e-12) -> np.ndarray:
     """
     PCA factor covariance:
         S ≈ U_k Λ_k U_k^T + Ψ,
@@ -145,59 +160,149 @@ def pca_factor_cov(S: np.ndarray, k: int, eps: float = 1e-12) -> np.ndarray:
     psi = np.maximum(diag_resid, eps)
     Sigma = Sig_k + np.diag(psi)
     Sigma = (Sigma + Sigma.T) / 2.0
-    return Sigma
-
-def js_eigvec_factor_cov(S: np.ndarray, k: int, n: int, eps: float = 1e-12) -> np.ndarray:
+    return Sigma'''
+def pca_factor_cov(S: np.ndarray, k: int, eps: float = 1e-12) -> np.ndarray:
     """
-    JS-eigvec factor covariance:
-      1) Top k eigenpairs of S: (U_k, Λ_k)
-      2) Apply James–Stein shrinkage to each column of U_k:
-         h^JSE = m(h)·1 + c^JSE (h - m(h)·1),
-         c^JSE = 1 - ν^2 / s^2(h),
-         s^2(h) = (λ^2/p) * Σ (h_i - m(h))^2,
-         ν^2 = (tr(S) - λ^2) / (p * (n - 1))
-      3) Σ_JS = \tilde U_k Λ_k \tilde U_k^T + diag(diag(S - \tilde U_k Λ_k \tilde U_k^T))
+    PCA factor covariance (paper-aligned baseline for JSE comparisons):
+
+    Use the *sample* top-k eigenvectors/eigenvalues, but keep the same Eq.(37)-style
+    low-rank + isotropic residual structure used in `js_eigvec_factor_cov`:
+
+        Σ = U_k diag(max(λ_j - ℓ^2, 0)) U_k^T + (n/p) ℓ^2 I,
+
+    where ℓ^2 is the average of the remaining nonzero eigenvalues of S, and n is
+    inferred as rank(S) (in the HL setting with p>n, rank(S)≈n).
+
+    This keeps the comparison focused on eigenvector shrinkage (PCA vs JSE),
+    rather than mixing in a different residual model (e.g., diagonal Ψ).
     """
     p = S.shape[0]
     k_eff = max(0, min(k, p - 1))
+
+    # Infer effective n from rank(S). In your setting p >> nobs, rank(S) ≈ nobs.
+    # Use a tolerance scaled by matrix magnitude for numerical robustness.
+    scale = float(np.linalg.norm(S, ord=2)) if p > 0 else 0.0
+    tol = max(eps, 1e-12 * scale)
+    n_eff = int(np.linalg.matrix_rank(S, tol=tol))
+    n_eff = max(1, min(n_eff, p))
+
+    trS = float(np.trace(S))
+
     if k_eff == 0:
-        diag = np.maximum(np.diag(S), eps)
-        return np.diag(diag)
+        # No factors: isotropic covariance consistent with Eq.(37)-style construction.
+        # With ℓ^2 = tr(S)/n_eff => (n_eff/p)ℓ^2 = tr(S)/p
+        delta2 = max(trS / float(p), eps)
+        Sigma = delta2 * np.eye(p)
+        Sigma = (Sigma + Sigma.T) / 2.0
+        return Sigma
 
-    U, lam = top_k_eigenpairs(S, k_eff)
+    # Top-k eigenpairs (helper returns (vecs, vals) in descending order)
+    U, lam = top_k_eigenpairs(S, k_eff)  # U: (p,k), lam: (k,)
 
-    # Column-wise JSE shrinkage (following the formula strictly)
-    U_js = U.copy()
+    # Bulk level: ℓ^2 = average of remaining nonzero eigenvalues
+    denom = n_eff - k_eff
+    if denom <= 0:
+        ell2 = 0.0
+    else:
+        ell2 = (trS - float(np.sum(lam))) / float(denom)
+        ell2 = max(ell2, 0.0)
+
+    # Spike strengths are (λ_j - ℓ^2), truncated at 0
+    spike = np.maximum(lam - ell2, 0.0)  # (k,)
+
+    Sig_k = U @ (spike[:, None] * U.T)
+
+    # Isotropic residual term: (n/p) ℓ^2 I
+    delta2 = (float(n_eff) / float(p)) * ell2
+    delta2 = max(delta2, 0.0)
+
+    Sigma = Sig_k + delta2 * np.eye(p)
+    Sigma = (Sigma + Sigma.T) / 2.0
+    return Sigma
+
+
+def js_eigvec_factor_cov(S: np.ndarray, k: int, n: int, eps: float = 1e-12) -> np.ndarray:
+    """
+    JS-eigvec factor covariance (aligned to Goldberg–Kercheval JSE paper):
+      1) Top k eigenpairs of S: (U_k, Λ_k)
+      2) Apply JSE shrinkage to each column of U_k:
+         h^JSE = m(h)·1 + c^JSE (h - m(h)·1),
+         c^JSE = 1 - ϖ^2 / s^2(h),
+         s^2(h) = (λ_j/p) * Σ (h_i - m(h))^2,
+         ϖ^2 = ℓ^2 / p,  where ℓ^2 is the average of the remaining nonzero eigenvalues of S
+      3) Covariance estimator consistent with Eq. (37)-style construction:
+         Σ = Q diag(max(λ_j - ℓ^2, 0)) Q^T + (n/p) ℓ^2 I
+         where Q is orthonormalized from the JSE-shrunk vectors.
+    """
+    p = S.shape[0]
+    k_eff = max(0, min(k, p - 1))
+
+    # IMPORTANT: You demean returns over time, so rank(S) is typically nobs-1.
+    # To keep PCA vs JSE comparisons paper-aligned (same Eq.(37) structure),
+    # use the same "effective n" (= number of nonzero eigenvalues) wherever n enters Eq.(31)/(37).
+    scale = float(np.linalg.norm(S, ord=2)) if p > 0 else 0.0
+    tol = max(eps, 1e-12 * scale)
+    n_eff = int(np.linalg.matrix_rank(S, tol=tol))
+    n_eff = max(1, min(n_eff, p, int(n)))
+
     trS = float(np.trace(S))
     one = np.ones((p, 1))
+
+    if k_eff == 0:
+        # No factors: isotropic covariance consistent with Eq.(37)-style construction.
+        # With ℓ^2 = tr(S)/n_eff => (n_eff/p)ℓ^2 = tr(S)/p
+        delta2 = max(trS / float(p), eps)
+        Sigma = delta2 * np.eye(p)
+        Sigma = (Sigma + Sigma.T) / 2.0
+        return Sigma
+
+    # Top-k eigenpairs (note: your helper returns (vecs, vals))
+    U, lam = top_k_eigenpairs(S, k_eff)  # U: (p,k), lam: (k,)
+
+    # ---- Paper-aligned bulk level: ℓ^2 = average of remaining nonzero eigenvalues ----
+    denom = n_eff - k_eff
+    if denom <= 0:
+        ell2 = 0.0
+    else:
+        ell2 = (trS - float(np.sum(lam))) / float(denom)
+        ell2 = max(ell2, 0.0)
+
+    varpi2 = ell2 / float(p)  # ϖ^2 = ℓ^2 / p
+
+    # ---- Column-wise JSE shrinkage ----
+    U_js = U.copy()
     for j in range(k_eff):
-        h = U[:, j:j+1]                 # j-th column
-        h = -h if h.mean() < 0 else h
-        lamj = float(lam[j])            # corresponding eigenvalue λ_j
-        m = float(h.mean())             # m(h)
+        h = U[:, j:j+1]
+        if float(h.mean()) < 0:
+            h = -h
+
+        m = float(h.mean())
         h_c = h - m * one
-        # s2 = (lamj ** 2) * float(np.sum(h_c ** 2)) / p
-        # v2 = (trS - (lamj ** 2)) / (p * (n - 1))
-        s2 = lamj * float(np.sum(h_c ** 2)) / p
-        # v2 represents the average variance of remaining eigenvalues
-        # After extracting factors 0 to j, the remaining variance is from eigenvalues j+1 onwards
-        sum_lam_up_to_j = float(np.sum(lam[:j+1]))  # sum of λ_0 + λ_1 + ... + λ_j
-        v2 = (trS - sum_lam_up_to_j) / (p * (n - (j + 1)))
-        c = 1.0 - (v2 / (s2 + 1e-18))   # add small value for numerical stability
+
+        lamj = float(lam[j])  # eigenvalue λ_j (paper denotes leading eigenvalue as λ^2)
+        s2 = lamj * float(np.sum(h_c ** 2)) / float(p)  # s^2(h)
+
+        c = 1.0 - (varpi2 / (s2 + 1e-18))  # c^JSE
+        c = max(0.0, c)  # positive-part truncation to avoid sign-flip amplification
         U_js[:, j:j+1] = m * one + c * h_c
 
-    # QR orthogonalization + align sign with original U column vectors
+    # Orthonormalize + align signs with original U
     Q, _ = np.linalg.qr(U_js)
     for j in range(k_eff):
         if float(np.dot(Q[:, j], U[:, j])) < 0:
             Q[:, j] *= -1.0
 
-    Sig_k = Q @ (lam[:, None] * Q.T)
-    diag_resid = np.diag(S - Sig_k)
-    psi = np.maximum(diag_resid, eps)
-    Sigma = Sig_k + np.diag(psi)
+    # ---- Paper-aligned covariance construction (Eq. (37) style) ----
+    spike = np.maximum(lam - ell2, 0.0)  # (k,)
+    Sig_k = Q @ (spike[:, None] * Q.T)   # Q diag(spike) Q^T
+
+    # Idiosyncratic (isotropic) variance term: (n/p) ℓ^2 I  with n = n_eff
+    delta2 = (float(n_eff) / float(p)) * ell2
+    Sigma = Sig_k + delta2 * np.eye(p)
+
     Sigma = (Sigma + Sigma.T) / 2.0
     return Sigma
+
 
 
 def ortho(M: np.ndarray) -> np.ndarray:
@@ -432,6 +537,12 @@ def process_folder(in_dir: Path, result_txt: Path, out_root: Path, eps: float = 
 
         Sigma_PCA = pca_factor_cov(S, k_eff, eps=eps)
         Sigma_JS = js_eigvec_factor_cov(S, k_eff, nobs, eps=eps)
+        raw_vmean, _ = top1_eigvec_mean(S)
+        pca_vmean, _ = top1_eigvec_mean(Sigma_PCA)
+        jse_vmean, _ = top1_eigvec_mean(Sigma_JS)
+        print(f"    Top-eigvec mean | Raw: {raw_vmean:.6e} | PCA: {pca_vmean:.6e} | JSE: {jse_vmean:.6e}")
+
+
         
         # JSM: Disabled - empirical tests show performance similar to JSE
         # Sigma_JSM = jsm_factor_cov(S, X, k_eff, nobs, eps=eps)

@@ -199,7 +199,7 @@ def compute_realized_return_for_next_month(
     if wsum == 0.0:
         # If all weights zero, nothing to compute
         return None
-    w = w / wsum
+    #w = w / wsum
 
     # Realized return is weighted sum
     realized = float(np.dot(w, r))

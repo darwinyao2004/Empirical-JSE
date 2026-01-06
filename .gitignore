@@ -28,6 +28,10 @@ env/
 .env
 
 portfolio_outputs_emp/
+portfolio_outputs_emp_42/
+portfolio_outputs_emp_42_daily/
 portfolio_outputs_sim/
 covariance_outputs_emp/
+covariance_outputs_emp_42/
+covariance_outputs_emp_42_daily/
 covariance_outputs_sim/
